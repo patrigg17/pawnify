@@ -283,8 +283,17 @@ const API = '/tools/alejandro/api';
 let token = localStorage.getItem('pawnify_token');
 let currentUser = null;
 let currentGame = null;
+let currentGameId = null;
 let selectedTimeControl = 'rapid';
 let aiDepth = 10;
+let gameMode = 'ai';
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+const TIME_LIMITS = { bullet: 60, blitz: 180, rapid: 600, none: null };
+let whiteTime = null;   // seconds remaining
+let blackTime = null;
+let timerInterval = null;
+let activeColor = null; // 'w' or 'b'
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 function showAuth(mode) {
@@ -402,12 +411,16 @@ async function launchGame() {
   const data = await res.json();
   if (!res.ok) { alert(data.error || 'Error'); return; }
   currentGame = data;
+  currentGameId = data.gameId;
+  window.currentGameId = data.gameId;
+  window.gameMode = window.gameMode || 'ai';
   document.getElementById('setupScreen').classList.remove('active');
   document.getElementById('gameScreen').style.display = 'block';
   initBoard(data.fen);
 }
 
 function backToDashboard() {
+  stopTimer();
   document.querySelectorAll('#gameScreen,#setupScreen').forEach(s => s.style.display = 'none');
   document.getElementById('dashboard').style.display = 'block';
 }
@@ -429,6 +442,7 @@ let orientation = 'white'; // player is white
 function initBoard(fen) {
   chess = new Chess(fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   renderBoard();
+  initTimers();
 }
 
 function renderBoard() {
@@ -543,29 +557,165 @@ function onSquareClick(sq) {
 }
 
 function makeMove(move, promotion) {
-  chess.move({ from: move.from, to: move.to, promotion: promotion || 'q' });
+  const result = chess.move({ from: move.from, to: move.to, promotion: promotion || 'q' });
   lastMove = { from: move.from, to: move.to };
   selectedSquare = null;
   legalMoves = [];
   renderBoard();
-  updateMoveList(move);
+  if (result) updateMoveList(result);
+
+  // Submit move to server (async, don't wait)
+  if (currentGameId) {
+    fetch(API + '/games/' + currentGameId + '/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ from: move.from, to: move.to, promotion: promotion || 'q' })
+    }).catch(e => console.error('Move submit error:', e));
+  }
 
   // AI move if playing vs AI and it's black's turn
-  if (window.gameMode === 'ai' && chess.turn() === 'b') {
+  if (window.gameMode === 'ai' && chess.turn() === 'b' && !chess.game_over()) {
+    aiThinking = true;
+    // Stop player's (white's) timer while AI "thinks"
+    if (TIME_LIMITS[selectedTimeControl] !== null) stopTimer();
     setTimeout(makeAIMove, 300);
   }
 }
 
 async function makeAIMove() {
-  const depth = aiDepth;
-  // Simple AI: pick a random legal move (for MVP)
-  // TODO: integrate Stockfish for real AI
-  const moves = chess.moves();
-  if (moves.length === 0) return;
-  const move = moves[Math.floor(Math.random() * moves.length)];
-  const verbose = chess.move({ from: move.slice(0,2), to: move.slice(2,4), promotion: 'q' });
-  lastMove = { from: move.slice(0,2), to: move.slice(2,4) };
-  renderBoard();
+  if (!currentGameId || chess.game_over()) { aiThinking = false; return; }
+  try {
+    const res = await fetch(API + '/games/' + currentGameId + '/ai-move', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    const data = await res.json();
+    if (!data.move) { aiThinking = false; return; }
+    const from = data.move.slice(0, 2);
+    const to = data.move.slice(2, 4);
+    const promo = data.move.length > 4 ? data.move[4] : 'q';
+
+    // Show AI suggestion briefly
+    showAISuggestion(from, to);
+
+    // Auto-move after ~800ms
+    setTimeout(() => {
+      const result = chess.move({ from, to, promotion: promo });
+      if (result) {
+        lastMove = { from, to };
+        renderBoard();
+        updateMoveList(result);
+      }
+      clearAISuggestion();
+      aiThinking = false;
+
+      // Start AI's (black's) timer after AI move completes
+      if (TIME_LIMITS[selectedTimeControl] !== null) startTimer('b');
+
+      // Submit AI move to server
+      if (currentGameId) {
+        fetch(API + '/games/' + currentGameId + '/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+          body: JSON.stringify({ from, to, promotion: promo })
+        }).catch(e => console.error('AI move submit error:', e));
+      }
+
+      if (chess.game_over()) {
+        showGameEnd();
+      } else if (window.gameMode === 'ai' && chess.turn() === 'b' && !chess.game_over()) {
+        // Next AI turn
+        aiThinking = true;
+        if (TIME_LIMITS[selectedTimeControl] !== null) stopTimer();
+        setTimeout(makeAIMove, 500);
+      } else {
+        // Back to human — start their (white's) timer
+        if (TIME_LIMITS[selectedTimeControl] !== null) startTimer('w');
+      }
+    }, 800);
+  } catch(e) {
+    console.error('AI move error:', e);
+    aiThinking = false;
+    if (TIME_LIMITS[selectedTimeControl] !== null) startTimer('w');
+  }
+}
+
+function showAISuggestion(from, to) {
+  document.querySelectorAll('.square').forEach(sq => {
+    if (sq.dataset.square === from || sq.dataset.square === to) {
+      sq.classList.add('ai-suggestion');
+    }
+  });
+}
+
+function clearAISuggestion() {
+  document.querySelectorAll('.ai-suggestion').forEach(sq => sq.classList.remove('ai-suggestion'));
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+let aiThinking = false; // true while waiting for AI server response
+
+function initTimers() {
+  stopTimer();
+  const limit = TIME_LIMITS[selectedTimeControl] ?? null;
+  if (limit === null) {
+    whiteTime = null; blackTime = null;
+    document.getElementById('whiteTimer').textContent = '∞';
+    document.getElementById('blackTimer').textContent = '∞';
+    return;
+  }
+  whiteTime = limit;
+  blackTime = limit;
+  updateTimerDisplay();
+  startTimer('w'); // White moves first
+}
+
+function startTimer(color) {
+  stopTimer();
+  activeColor = color;
+  timerInterval = setInterval(() => {
+    if (activeColor === 'w') {
+      whiteTime = Math.max(0, whiteTime - 1);
+    } else {
+      blackTime = Math.max(0, blackTime - 1);
+    }
+    updateTimerDisplay();
+    if (whiteTime === 0 || blackTime === 0) {
+      stopTimer();
+      showGameEnd('time');
+    }
+  }, 1000);
+}
+
+function stopTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  activeColor = null;
+}
+
+function updateTimerDisplay() {
+  document.getElementById('whiteTimer').textContent = formatTime(whiteTime);
+  document.getElementById('blackTimer').textContent = formatTime(blackTime);
+}
+
+function formatTime(seconds) {
+  if (seconds === null) return '∞';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+function showGameEnd(reason) {
+  stopTimer();
+  let msg = '';
+  if (reason === 'time') {
+    msg = activeColor === 'w' ? '⏰ ¡Se acabó el tiempo de blancas!' : '⏰ ¡Se acabó el tiempo de negras!';
+  } else if (chess.in_checkmate()) {
+    msg = chess.turn() === 'w' ? '🏆 ¡Negras ganan por jaque mate!' : '🏆 ¡Blancas ganan por jaque mate!';
+  } else if (chess.in_draw()) {
+    msg = '🤝 ¡Empate!';
+  } else {
+    msg = '🏁 Partida finalizada';
+  }
+  alert(msg);
 }
 
 function showPromotionModal(move) {

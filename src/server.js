@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
+const { Chess } = require('chess.js');
 
 // ── App Setup ─────────────────────────────────────────────────────────────────
 const app = express();
@@ -23,7 +24,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE,
     password_hash TEXT NOT NULL,
     elo INTEGER DEFAULT 1200,
     avatar TEXT DEFAULT '',
@@ -69,10 +70,9 @@ db.exec(`
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use('/tools/alejandro', express.static(path.join(__dirname, '..', 'public')));
 
-// DEBUG: log all requests
-app.use((req, res, next) => { console.log(`📩 ${req.method} ${req.url}`); next(); });
+
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 function signToken(userId) {
@@ -108,30 +108,44 @@ app.get('/', (req, res) => {
   res.render('index', { user });
 });
 
+// Also handle /tools/alejandro and /tools/alejandro/
+app.get('/tools/alejandro', (req, res) => {
+  const token = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '';
+  let user = null;
+  if (token) {
+    try { const { userId } = jwt.verify(token, JWT_SECRET); user = db.prepare('SELECT id,username,elo,avatar FROM users WHERE id=?').get(userId); } catch(e) {}
+  }
+  res.render('index', { user });
+});
+
 // Auth
 app.post('/api/auth/register', async (req, res) => {
-  const { username, email, password } = req.body;
-  if (!username || !email || !password) return res.status(400).json({ error: 'All fields required' });
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'All fields required' });
   if (username.length < 3 || username.length > 20) return res.status(400).json({ error: 'Username 3-20 chars' });
   if (password.length < 6) return res.status(400).json({ error: 'Password min 6 chars' });
-  const existing = db.prepare('SELECT id FROM users WHERE username=? OR email=?').get(username, email);
-  if (existing) return res.status(409).json({ error: 'Username or email already taken' });
+  const existing = db.prepare('SELECT id FROM users WHERE username=?').get(username);
+  if (existing) return res.status(409).json({ error: 'Username already taken' });
   const hash = await bcrypt.hash(password, 12);
-  const result = db.prepare('INSERT INTO users (username, email, password_hash) VALUES (?,?,?)').run(username, email, hash);
+  const result = db.prepare('INSERT INTO users (username, password_hash) VALUES (?,?)').run(username, hash);
   const token = signToken(result.lastInsertRowid);
-  const user = db.prepare('SELECT id, username, email, elo, avatar FROM users WHERE id=?').get(result.lastInsertRowid);
+  const user = db.prepare('SELECT id, username, elo, avatar FROM users WHERE id=?').get(result.lastInsertRowid);
   res.json({ token, user });
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-  const user = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+  // Accept username (or email) via either field name — frontend sends email field for login
+  const identifier = req.body.username || req.body.email;
+  const password = req.body.password;
+  if (!identifier || !password) return res.status(400).json({ error: 'Username and password required' });
+  const user = identifier.includes('@')
+    ? db.prepare('SELECT * FROM users WHERE email=?').get(identifier)
+    : db.prepare('SELECT * FROM users WHERE username=?').get(identifier);
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
   const token = signToken(user.id);
-  res.json({ token, user: { id: user.id, username: user.username, email: user.email, elo: user.elo, avatar: user.avatar } });
+  res.json({ token, user: { id: user.id, username: user.username, elo: user.elo, avatar: user.avatar } });
 });
 
 // Profile
@@ -240,10 +254,16 @@ app.post('/api/games/:gameId/move', authMiddleware, (req, res) => {
   const { from, to, promotion } = req.body;
   const game = db.prepare('SELECT * FROM games WHERE game_id=?').get(req.params.gameId);
   if (!game) return res.status(404).json({ error: 'Game not found' });
+
+  // Replay all moves to get current FEN
+  const c = new Chess(game.fen);
+  try { c.move({ from, to, promotion }); } catch(e) { return res.status(400).json({ error: 'Illegal move' }); }
+  const newFen = c.fen();
+
   const moves = JSON.parse(game.moves || '[]');
   moves.push({ from, to, promotion, by: req.user.id, at: new Date().toISOString() });
-  db.prepare('UPDATE games SET moves=?, updated_at=datetime("now", "+02:00") WHERE game_id=?')
-    .run(JSON.stringify(moves), req.params.gameId);
+  db.prepare('UPDATE games SET moves=?, fen=?, updated_at=datetime("now", "+02:00") WHERE game_id=?')
+    .run(JSON.stringify(moves), newFen, req.params.gameId);
   res.json({ ok: true, moves });
 });
 
