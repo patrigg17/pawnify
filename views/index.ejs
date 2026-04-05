@@ -534,6 +534,7 @@ function findKingSquare(color) {
 function onSquareClick(sq) {
   const piece = chess.get(sq);
   const turn = chess.turn();
+  console.log('[click] sq=', sq, 'piece=', piece, 'turn=', turn, 'selectedSquare=', selectedSquare, 'gameMode=', window.gameMode);
 
   if (!selectedSquare) {
     if (piece && piece.color === turn) {
@@ -596,6 +597,7 @@ function makeMove(move, promotion) {
   }
 
   // AI move if playing vs AI and it's black's turn
+  console.log('[makeMove] turn after move:', chess.turn(), 'gameMode:', window.gameMode, 'game_over:', chess.game_over());
   if (window.gameMode === 'ai' && chess.turn() === 'b' && !chess.game_over()) {
     aiThinking = true;
     // Stop player's (white's) timer while AI "thinks"
