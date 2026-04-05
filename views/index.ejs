@@ -578,32 +578,60 @@ function makeMove(move, promotion) {
     aiThinking = true;
     // Stop player's (white's) timer while AI "thinks"
     if (TIME_LIMITS[selectedTimeControl] !== null) stopTimer();
+    console.log('[makeMove] Scheduling makeAIMove in 300ms, gameMode=', window.gameMode, 'currentGameId=', currentGameId, 'turn=BLACK');
     setTimeout(makeAIMove, 300);
+  } else {
+    console.log('[makeMove] AI NOT scheduled: gameMode=', window.gameMode, 'turn=', chess.turn(), 'game_over=', chess.game_over());
   }
 }
 
 async function makeAIMove() {
-  if (!currentGameId || chess.game_over()) { aiThinking = false; return; }
+  const fenBefore = chess.fen();
+  const turnBefore = chess.turn();
+  console.log('[AI] makeAIMove called', { currentGameId, game_over: chess.game_over(), turn: turnBefore, fen: fenBefore });
+  if (!currentGameId || chess.game_over()) { aiThinking = false; console.warn('[AI] ABORT: no gameId or game over'); return; }
+  if (turnBefore !== 'b') { aiThinking = false; console.warn('[AI] ABORT: not black\'s turn (turn=', turnBefore, ')'); return; }
   try {
+    console.log('[AI] Fetching move from server...');
     const res = await fetch(API + '/games/' + currentGameId + '/ai-move', {
       headers: { Authorization: 'Bearer ' + token }
     });
     const data = await res.json();
-    if (!data.move) { aiThinking = false; return; }
+    console.log('[AI] Server response:', JSON.stringify(data));
+    if (!data.move) { aiThinking = false; console.warn('[AI] ABORT: no move in response'); return; }
     const from = data.move.slice(0, 2);
     const to = data.move.slice(2, 4);
     const promo = data.move.length > 4 ? data.move[4] : 'q';
+    console.log('[AI] Parsed AI move:', { from, to, promo }, 'UCI:', data.move);
 
-    // Show AI suggestion briefly
+    // Validate: from-square MUST contain a BLACK piece right now
+    const fromPiece = chess.get(from);
+    console.log('[AI] Piece at', from, ':', fromPiece, '— expected black piece');
+    if (!fromPiece || fromPiece.color !== 'b') {
+      console.error('[AI] VALIDATION FAILED: from=' + from + ' does not have a black piece! piece=' + JSON.stringify(fromPiece));
+      console.error('[AI] This means the server returned a move based on a STALE or WRONG FEN.');
+      console.error('[AI] Client FEN (current):', fenBefore);
+      console.error('[AI] Human lastMove (lastMove):', JSON.stringify(lastMove));
+      clearAISuggestion();
+      aiThinking = false;
+      return;
+    }
+
+    // Show AI suggestion (clear any previous first)
     showAISuggestion(from, to);
 
     // Auto-move after ~800ms
     setTimeout(() => {
+      console.log('[AI] Inner setTimeout firing, executing chess.move({ from:', from, 'to:', to, 'promotion:', promo, '})');
       const result = chess.move({ from, to, promotion: promo });
       if (result) {
+        console.log('[AI] chess.move SUCCESS:', result.san);
         lastMove = { from, to };
         renderBoard();
         updateMoveList(result);
+      } else {
+        console.error('[AI] chess.move FAILED — move was illegal! from:', from, 'to:', to, 'promo:', promo);
+        console.error('[AI] FEN at time of failure:', chess.fen());
       }
       clearAISuggestion();
       aiThinking = false;
@@ -617,16 +645,16 @@ async function makeAIMove() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
           body: JSON.stringify({ from, to, promotion: promo })
-        }).catch(e => console.error('AI move submit error:', e));
+        }).catch(e => console.error('[AI] Move submit error:', e));
       }
 
       if (chess.game_over()) {
         showGameEnd();
       } else if (window.gameMode === 'ai' && chess.turn() === 'b' && !chess.game_over()) {
-        // Next AI turn
+        // Next AI turn — schedule after move is fully done, not before
         aiThinking = true;
         if (TIME_LIMITS[selectedTimeControl] !== null) stopTimer();
-        setTimeout(makeAIMove, 500);
+        setTimeout(makeAIMove, 800);
       } else {
         // Back to human — start their (white's) timer
         if (TIME_LIMITS[selectedTimeControl] !== null) startTimer('w');
@@ -640,6 +668,15 @@ async function makeAIMove() {
 }
 
 function showAISuggestion(from, to) {
+  // Always clear previous suggestions first to avoid stale highlights
+  clearAISuggestion();
+  // Defensive: validate that 'from' holds a BLACK piece (AI's piece)
+  // If it holds white or nothing, the server likely returned a move in wrong format/FEN
+  const pieceAtFrom = chess.get(from);
+  console.log('[showAISuggestion] highlighting AI suggestion:', { from, to, pieceAtFrom });
+  if (!pieceAtFrom || pieceAtFrom.color !== 'b') {
+    console.error('[showAISuggestion] BUG: from-square does not have a black piece!', pieceAtFrom, '— AI move was likely in wrong format. from:', from, 'to:', to);
+  }
   document.querySelectorAll('.square').forEach(sq => {
     if (sq.dataset.square === from || sq.dataset.square === to) {
       sq.classList.add('ai-suggestion');
