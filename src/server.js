@@ -278,7 +278,7 @@ app.post('/api/games/:gameId/move', authMiddleware, (req, res) => {
 
   const moves = JSON.parse(game.moves || '[]');
   moves.push({ from, to, promotion, by: req.user.id, at: new Date().toISOString() });
-  db.prepare('UPDATE games SET moves=?, fen=?, updated_at=datetime("now", "+02:00") WHERE game_id=?')
+  db.prepare('UPDATE games SET moves=?, fen=? WHERE game_id=?')
     .run(JSON.stringify(moves), newFen, req.params.gameId);
   res.json({ ok: true, moves });
 });
@@ -294,7 +294,7 @@ app.get('/api/games/:gameId/ai-move', authMiddleware, (req, res) => {
       console.error(`[/ai-move] ERROR: err=${err} aiMove=${aiMove}`);
       return res.status(500).json({ error: 'AI failed to respond' });
     }
-    console.log(`[/ai-move] Returning move: ${aiMove}`);
+    console.log(`[/ai-move] ✅ Returning move: ${aiMove}`);
     res.json({ move: aiMove });
   });
 });
@@ -330,7 +330,7 @@ io.on('connection', (socket) => {
     const moves = JSON.parse(game.moves || '[]');
     moves.push({ from, to, promotion, by: socket.user.id, at: new Date().toISOString() });
     // TODO: use chess.js to update FEN properly
-    db.prepare('UPDATE games SET moves=?, updated_at=datetime("now","+02:00") WHERE game_id=?')
+    db.prepare('UPDATE games SET moves=? WHERE game_id=?')
       .run(JSON.stringify(moves), gameId);
     io.to('game_' + gameId).emit('game:move', { from, to, promotion, by: socket.user.id });
   });
