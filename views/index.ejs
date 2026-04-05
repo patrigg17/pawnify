@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pawnify — Chess Platform</title>
-<link rel="icon" type="image/svg+xml" href="/img/pawnify-icon.svg">
+<link rel="icon" type="image/svg+xml" href="img/pawnify-icon.svg">
 <style>
 :root {
   --bg: #0a0a0f;
@@ -73,9 +73,9 @@ body { background:var(--bg); color:var(--text); font-family:system-ui,sans-serif
 
 /* Chess board */
 .board-container { display:flex; gap:2rem; align-items:flex-start; flex-wrap:wrap; justify-content:center; }
-.board-wrap { position:relative; }
-.board { display:grid; grid-template-columns:repeat(8,1fr); width:min(480px,90vw); aspect-ratio:1; border-radius:8px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,.5); }
-.square { aspect-ratio:1; display:flex; align-items:center; justify-content:center; position:relative; cursor:pointer; }
+.board-wrap { position:relative; width:480px; height:480px; max-width:90vw; }
+.board { display:grid; grid-template-columns:repeat(8,60px); grid-template-rows:repeat(8,60px); width:480px; height:480px; border-radius:8px; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,.5); border:3px solid red; }
+.square { width:60px; height:60px; display:flex; align-items:center; justify-content:center; position:relative; cursor:pointer; }
 .square.light { background:var(--board-light); }
 .square.dark { background:var(--board-dark); }
 .square.selected { background:rgba(240,192,64,.6) !important; }
@@ -86,6 +86,7 @@ body { background:var(--bg); color:var(--text); font-family:system-ui,sans-serif
 .square .piece { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
 .square-hint::after { content:''; position:absolute; width:28%; height:28%; border-radius:50%; background:rgba(0,0,0,.15); }
 .square-capture-hint::after { content:''; position:absolute; inset:4px; border:4px solid transparent; border-radius:50%; }
+.square.ai-suggestion { background:rgba(0,200,100,.55) !important; box-shadow:inset 0 0 0 3px rgba(0,200,100,.8); }
 
 /* Promotion modal */
 .promo-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:200; align-items:center; justify-content:center; }
@@ -123,7 +124,7 @@ body { background:var(--bg); color:var(--text); font-family:system-ui,sans-serif
 
 <!-- AUTH SCREEN -->
 <div id="authScreen" class="auth-screen">
-  <div class="logo"><img src="/img/pawnify-icon.svg" alt="♟️" style="height:48px;width:48px;vertical-align:middle;margin-right:8px"> Pawnify<span> by Alejandro</span></div>
+  <div class="logo"><img src="img/pawnify-icon.svg" alt="♟️" style="height:48px;width:48px;vertical-align:middle;margin-right:8px"> Pawnify<span> by Alejandro</span></div>
   <p class="tagline">La plataforma de ajedrez que te ayuda a mejorar</p>
   <button class="play-btn" onclick="showAuth('login')">▶ Jugar ahora</button>
 
@@ -238,7 +239,7 @@ body { background:var(--bg); color:var(--text); font-family:system-ui,sans-serif
 <div id="gameScreen" class="wrap" style="display:none;padding-top:1rem">
   <div class="board-container">
     <div class="board-wrap">
-      <div id="board" class="board"></div>
+      <div id="board" class="board"><span style="color:white;font-size:40px;display:flex;align-items:center;justify-content:center;width:100%;height:100%">♟️</span></div>
     </div>
     <div class="game-sidebar">
       <div class="player-info">
@@ -276,7 +277,7 @@ body { background:var(--bg); color:var(--text); font-family:system-ui,sans-serif
 
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="js/chess.js?v=202604051"></script>
 <script>
 const API = '/tools/alejandro/api';
 let token = localStorage.getItem('pawnify_token');
@@ -434,7 +435,7 @@ function renderBoard() {
   const board = document.getElementById('board');
   board.innerHTML = '';
   const turn = chess.turn();
-  const inCheck = chess.inCheck();
+  const inCheck = chess.in_check();
   const kings = chess.board().flat().filter(p => p && p.type === 'k' && p.color === turn);
   const checkSquare = inCheck ? findKingSquare(turn) : null;
 
@@ -458,8 +459,9 @@ function renderBoard() {
       if (piece) {
         const span = document.createElement('span');
         span.className = 'piece';
-        span.textContent = pieceSymbols[piece.color + piece.type.toUpperCase()] || pieceSymbols[piece.type];
+        span.textContent = pieceSymbols[piece.color === 'w' ? piece.type.toUpperCase() : piece.type];
         if (piece.color === 'b') span.style.color = '#1a1a1a';
+        else span.style.color = '#f5f5f5';
         div.appendChild(span);
       }
 

@@ -13,6 +13,7 @@ let gameMode = 'ai'; // 'ai' or 'player'
 let selectedTimeControl = 'rapid';
 let aiDepth = 15;
 let stockfishReady = false;
+let pendingAIMove = null; // AI suggested move — human must enter it manually
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 function showAuth(mode) {
@@ -30,7 +31,7 @@ function showAuth(mode) {
     switchText.innerHTML = '¿No tienes cuenta? <a onclick="showAuth(\'register\')">Regístrate</a>';
   } else {
     title.textContent = 'Crear cuenta';
-    emailRow.style.display = 'block';
+    emailRow.style.display = 'none';
     btn.textContent = 'Registrarme';
     switchText.innerHTML = '¿Ya tienes cuenta? <a onclick="showAuth(\'login\')">Inicia sesión</a>';
   }
@@ -42,12 +43,11 @@ async function handleAuth(e) {
   const mode = document.getElementById('authTitle').textContent === 'Iniciar sesión' ? 'login' : 'register';
   const user = document.getElementById('authUser').value;
   const pass = document.getElementById('authPass').value;
-  const email = document.getElementById('authEmail').value;
   const errorEl = document.getElementById('authError');
 
   const body = mode === 'login'
-    ? { email: user, password: pass }
-    : { username: user, email, password: pass };
+    ? { username: user, password: pass }
+    : { username: user, password: pass };
 
   try {
     const res = await fetch(`${API}/auth/${mode}`, {
@@ -214,6 +214,26 @@ function renderBoard() {
 }
 
 function onSquareClick(sq) {
+  if (!chess) return;
+
+  // ── AI SUGGESTED MOVE: human enters the AI's move manually ──
+  if (pendingAIMove) {
+    if (sq === pendingAIMove.from) {
+      selectedSquare = sq;
+      renderBoard();
+    } else if (sq === pendingAIMove.to && selectedSquare) {
+      const from = selectedSquare;
+      const to = sq;
+      const promo = pendingAIMove.promotion;
+      selectedSquare = null;
+      pendingAIMove = null;
+      clearAIMoveSuggestion();
+      // Human enters the AI's move as if playing the rival — same submitMove flow
+      submitAIMove(from, to, promo);
+    }
+    return;
+  }
+
   if (!isMyTurn || !chess) return;
 
   if (!selectedSquare) {
@@ -281,13 +301,13 @@ function submitMove(from, to, promotion) {
         addMoveToList(from + to + (promotion !== 'q' ? promotion : ''));
         renderBoard();
 
-        // If vs AI, wait for AI move
+        // If vs AI, fetch AI suggestion (human must enter it manually)
         if (gameMode === 'ai' && chess.turn() === 'b' && !chess.isGameOver()) {
           isMyTurn = false;
           const turnEl = document.getElementById('turnIndicator') || createTurnIndicator();
           turnEl.textContent = '⏳ IA pensando...';
           document.getElementById('board').style.opacity = '0.7';
-          setTimeout(() => fetchAIMove(), 500);
+          setTimeout(() => requestAIMove(), 500);
         }
 
         // Check game end
@@ -299,7 +319,8 @@ function submitMove(from, to, promotion) {
     .catch(e => console.error('Move error:', e));
 }
 
-function fetchAIMove() {
+// Fetches AI suggestion and displays it — does NOT auto-apply
+function requestAIMove() {
   fetch(`${API}/games/${currentGameId}/ai-move`, {
     headers: { Authorization: `Bearer ${token}` }
   })
@@ -310,18 +331,12 @@ function fetchAIMove() {
         const to = data.move.slice(2, 4);
         const promo = data.move.length > 4 ? data.move[4] : 'q';
 
-        // Apply AI move locally
-        const result = chess.move({ from, to, promotion: promo });
-        if (result) {
-          lastMove = { from, to };
-          addMoveToList(data.move);
-          renderBoard();
-        }
+        pendingAIMove = { from, to, promotion: promo };
 
-        isMyTurn = true;
         document.getElementById('board').style.opacity = '1';
         const turnEl = document.getElementById('turnIndicator') || createTurnIndicator();
-        turnEl.textContent = '⬤ Tu turno';
+        turnEl.textContent = '🤖 IA sugiere: ' + data.move + ' — haz click en la jugadad del rival';
+        showAIMoveSuggestion(from, to);
 
         if (chess.isGameOver()) setTimeout(() => showGameEnd(), 500);
       }
@@ -331,6 +346,56 @@ function fetchAIMove() {
       isMyTurn = true;
       document.getElementById('board').style.opacity = '1';
     });
+}
+
+// Submits the AI's move (human entered it manually as the rival)
+function submitAIMove(from, to, promotion) {
+  fetch(`${API}/games/${currentGameId}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ from, to, promotion })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        const result = chess.move({ from, to, promotion });
+        if (result) {
+          lastMove = { from, to };
+          addMoveToList(from + to + (promotion !== 'q' ? promotion : ''));
+        }
+        renderBoard();
+        isMyTurn = true;
+        const turnEl = document.getElementById('turnIndicator') || createTurnIndicator();
+        turnEl.textContent = '⬤ Tu turno';
+
+        if (chess.isGameOver()) {
+          setTimeout(() => showGameEnd(), 500);
+        } else if (gameMode === 'ai' && chess.turn() === 'b' && !chess.isGameOver()) {
+          // Next AI turn — request suggestion again
+          isMyTurn = false;
+          turnEl.textContent = '⏳ IA pensando...';
+          document.getElementById('board').style.opacity = '0.7';
+          setTimeout(() => requestAIMove(), 500);
+        }
+      }
+    })
+    .catch(e => console.error('AI move submit error:', e));
+}
+
+function showAIMoveSuggestion(from, to) {
+  const squares = document.querySelectorAll('.square');
+  squares.forEach(sq => {
+    const name = sq.dataset.square;
+    if (name === from || name === to) {
+      sq.classList.add('ai-suggestion');
+    }
+  });
+}
+
+function clearAIMoveSuggestion() {
+  document.querySelectorAll('.square.ai-suggestion').forEach(sq => {
+    sq.classList.remove('ai-suggestion');
+  });
 }
 
 function createTurnIndicator() {
