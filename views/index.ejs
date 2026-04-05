@@ -95,6 +95,28 @@ body { background:var(--bg); color:var(--text); font-family:system-ui,sans-serif
 .promo-piece { font-size:3rem; cursor:pointer; padding:.5rem; border-radius:10px; transition:background .15s; }
 .promo-piece:hover { background:var(--bg3); }
 
+/* Game End Modal */
+.game-end-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.8); z-index:300; align-items:center; justify-content:center; }
+.game-end-modal.open { display:flex; }
+.game-end-card { background:var(--bg2); border:1px solid var(--border); border-radius:20px; padding:2.5rem 2rem; width:420px; max-width:92vw; text-align:center; animation:modalPop .25s ease; }
+@keyframes modalPop { from { transform:scale(.88); opacity:0; } to { transform:scale(1); opacity:1; } }
+.game-end-icon { font-size:4rem; margin-bottom:.75rem; }
+.game-end-title { font-size:1.6rem; font-weight:900; margin-bottom:.4rem; color:var(--text); }
+.game-end-title.win { color:#40d080; }
+.game-end-title.lose { color:#e05060; }
+.game-end-title.draw { color:#f0c040; }
+.game-end-reason { font-size:.82rem; color:var(--muted); margin-bottom:.5rem; line-height:1.5; }
+.game-end-move { display:inline-block; background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:.3rem .7rem; font-family:monospace; font-size:.82rem; color:var(--gold); margin-bottom:1.5rem; }
+.game-end-stats { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; margin-bottom:1.5rem; }
+.game-end-stat { background:var(--bg3); border-radius:10px; padding:.75rem; }
+.game-end-stat .l { font-size:.62rem; text-transform:uppercase; color:var(--muted); font-weight:600; letter-spacing:.06em; }
+.game-end-stat .v { font-size:1.3rem; font-weight:800; font-family:monospace; }
+.game-end-actions { display:flex; gap:.75rem; justify-content:center; flex-wrap:wrap; }
+.btn-new-game { background:var(--gold); color:#000; font-weight:800; padding:.65rem 1.5rem; border-radius:10px; border:none; cursor:pointer; font-size:.9rem; }
+.btn-new-game:hover { opacity:.88; }
+.btn-dashboard { background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:.65rem 1.5rem; border-radius:10px; cursor:pointer; font-size:.9rem; }
+.btn-dashboard:hover { border-color:var(--gold); }
+
 /* Game sidebar */
 .game-sidebar { background:var(--bg2); border:1px solid var(--border); border-radius:14px; padding:1rem; min-width:220px; }
 .game-sidebar h3 { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:.75rem; font-weight:600; }
@@ -742,17 +764,86 @@ function formatTime(seconds) {
 
 function showGameEnd(reason) {
   stopTimer();
-  let msg = '';
+
+  const isPlayerWhite = window.gameMode === 'ai'; // human always white vs AI
+  const moveHistory = chess.history();
+  const moveCount = moveHistory.length;
+  const lastMoveSan = moveHistory[moveCount - 1] || null;
+
+  // Determine outcome
+  let icon, title, titleClass, reasonText, winColor = null;
+
   if (reason === 'time') {
-    msg = activeColor === 'w' ? '⏰ ¡Se acabó el tiempo de blancas!' : '⏰ ¡Se acabó el tiempo de negras!';
+    // activeColor = color that just ran out of time
+    const loserIsWhite = activeColor === 'w';
+    const winnerIsPlayer = (loserIsWhite && !isPlayerWhite) || (!loserIsWhite && isPlayerWhite);
+    icon = '⏰';
+    titleClass = winnerIsPlayer ? 'win' : 'lose';
+    title = winnerIsPlayer ? '🏆 ¡Ganaste!' : '💀 Pierdes';
+    reasonText = winnerIsPlayer
+      ? `A tu rival se le acabó el tiempo. ¡El reloj fue tu mejor aliado!`
+      : `Te quedaste sin tiempo. La próxima vez lleva un reloj más rápido 😅`;
+    winColor = winnerIsPlayer ? 'player' : 'ai';
   } else if (chess.in_checkmate()) {
-    msg = chess.turn() === 'w' ? '🏆 ¡Negras ganan por jaque mate!' : '🏆 ¡Blancas ganan por jaque mate!';
+    const loserIsWhite = chess.turn() === 'w';
+    const winnerIsPlayer = (loserIsWhite && isPlayerWhite) || (!loserIsWhite && !isPlayerWhite);
+    icon = '♚';
+    titleClass = winnerIsPlayer ? 'win' : 'lose';
+    title = winnerIsPlayer ? '🏆 ¡Ganaste por jaque mate!' : '💀 Jaque mate — pierdes';
+    const winner = winnerIsPlayer ? 'tu' : 'la IA';
+    reasonText = winnerIsPlayer
+      ? `Jugada decisiva: el rival no tiene escapatoria. ¡Bien jugado!`
+      : `La IA remató con ${lastMoveSan}. Aprende de esta posición y vuelve con otra ronda`;
+    winColor = winnerIsPlayer ? 'player' : 'ai';
+  } else if (chess.in_stalemate()) {
+    icon = '🤝'; titleClass = 'draw'; title = '🤝 Ahogado — Empate';
+    reasonText = `Ninguno tiene movimientos legales. El rey está en stalemate sin jaque.`;
+  } else if (chess.in_threefold_repetition()) {
+    icon = '🤝'; titleClass = 'draw'; title = '🤝 Repetición triple — Empate';
+    reasonText = `La misma posición ha aparecido 3 veces. Regla deitsch de repetición.`;
+  } else if (chess.insufficient_material()) {
+    icon = '🤝'; titleClass = 'draw'; title = '🤝 Material insuficiente — Empate';
+    reasonText = `No hay piezas suficientes en el tablero para forzar un jaque mate.`;
   } else if (chess.in_draw()) {
-    msg = '🤝 ¡Empate!';
+    icon = '🤝'; titleClass = 'draw'; title = '🤝 Empate';
+    reasonText = `La partida termina en tablas.`;
   } else {
-    msg = '🏁 Partida finalizada';
+    icon = '🏁'; titleClass = ''; title = '🏁 Partida finalizada';
+    reasonText = `La partida ha terminado.`;
   }
-  alert(msg);
+
+  // Update modal
+  document.getElementById('geIcon').textContent = icon;
+  const titleEl = document.getElementById('geTitle');
+  titleEl.textContent = title;
+  titleEl.className = 'game-end-title ' + titleClass;
+  document.getElementById('geReason').textContent = reasonText;
+
+  const moveEl = document.getElementById('geMove');
+  if (lastMoveSan) {
+    moveEl.textContent = 'Última jugaba: ' + lastMoveSan;
+    moveEl.style.display = 'inline-block';
+  } else {
+    moveEl.style.display = 'none';
+  }
+
+  document.getElementById('geMoves').textContent = moveCount;
+  document.getElementById('geDuration').textContent = moveCount > 0 ? Math.ceil(moveCount / 2) + ' jugadas' : '—';
+
+  document.getElementById('gameEndModal').classList.add('open');
+}
+
+function closeGameEndModal(action) {
+  document.getElementById('gameEndModal').classList.remove('open');
+  if (action === 'new') {
+    stopTimer();
+    document.querySelectorAll('#gameScreen,#setupScreen').forEach(s => s.style.display = 'none');
+    document.getElementById('setupScreen').classList.add('active');
+    document.getElementById('dashboard').style.display = 'none';
+    launchGame();
+  } else {
+    backToDashboard();
+  }
 }
 
 function showPromotionModal(move) {
@@ -784,5 +875,23 @@ function updateMoveList(move) {
 // Init
 loadUser();
 </script>
+  <!-- Game End Modal -->
+  <div id="gameEndModal" class="game-end-modal">
+    <div class="game-end-card">
+      <div class="game-end-icon" id="geIcon">🏆</div>
+      <div class="game-end-title" id="geTitle">—</div>
+      <div class="game-end-reason" id="geReason">—</div>
+      <div class="game-end-move" id="geMove" style="display:none"></div>
+      <div class="game-end-stats">
+        <div class="game-end-stat"><div class="l">Movimientos</div><div class="v" id="geMoves">0</div></div>
+        <div class="game-end-stat"><div class="l">Duración</div><div class="v" id="geDuration">—</div></div>
+      </div>
+      <div class="game-end-actions">
+        <button class="btn-new-game" onclick="closeGameEndModal('new')">🔄 Nueva partida</button>
+        <button class="btn-dashboard" onclick="closeGameEndModal('dash')">← Inicio</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
