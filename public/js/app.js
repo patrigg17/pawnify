@@ -216,21 +216,9 @@ function renderBoard() {
 function onSquareClick(sq) {
   if (!chess) return;
 
-  // ── AI SUGGESTED MOVE: human enters the AI's move manually ──
+  // ── AI AUTO-MOVE: ignore clicks while AI is playing ──
   if (pendingAIMove) {
-    if (sq === pendingAIMove.from) {
-      selectedSquare = sq;
-      renderBoard();
-    } else if (sq === pendingAIMove.to && selectedSquare) {
-      const from = selectedSquare;
-      const to = sq;
-      const promo = pendingAIMove.promotion;
-      selectedSquare = null;
-      pendingAIMove = null;
-      clearAIMoveSuggestion();
-      // Human enters the AI's move as if playing the rival — same submitMove flow
-      submitAIMove(from, to, promo);
-    }
+    // AI will auto-submit — ignore human clicks during the window
     return;
   }
 
@@ -319,7 +307,7 @@ function submitMove(from, to, promotion) {
     .catch(e => console.error('Move error:', e));
 }
 
-// Fetches AI suggestion and displays it — does NOT auto-apply
+// Fetches AI suggestion, shows it briefly, then auto-applies the move
 function requestAIMove() {
   fetch(`${API}/games/${currentGameId}/ai-move`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -335,8 +323,19 @@ function requestAIMove() {
 
         document.getElementById('board').style.opacity = '1';
         const turnEl = document.getElementById('turnIndicator') || createTurnIndicator();
-        turnEl.textContent = '🤖 IA sugiere: ' + data.move + ' — haz click en la jugadad del rival';
+        turnEl.textContent = '🤖 IA jugando...';
         showAIMoveSuggestion(from, to);
+
+        // ── Auto-move: wait ~800ms then submit the AI move automatically ──
+        setTimeout(() => {
+          if (pendingAIMove) {
+            const { from: f, to: t, promotion: p } = pendingAIMove;
+            selectedSquare = null;
+            pendingAIMove = null;
+            clearAIMoveSuggestion();
+            submitAIMove(f, t, p);
+          }
+        }, 800);
 
         if (chess.isGameOver()) setTimeout(() => showGameEnd(), 500);
       }
